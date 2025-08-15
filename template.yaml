@@ -1,3 +1,20 @@
+# platform-team-and-template.yaml
+
+apiVersion: backstage.io/v1alpha1
+kind: Group
+metadata:
+  name: platform-team
+  namespace: default
+  description: Platform Team responsible for internal developer platform and tooling
+spec:
+  type: team
+  profile:
+    displayName: Platform Team
+    email: platform-team@example.com
+  children: []
+  members:
+    - user:default/guest
+---
 apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
@@ -5,7 +22,7 @@ metadata:
   title: Any repo to Vercel
   description: Scaffolds from any Git repo, publishes to GitHub, and deploys to Vercel
 spec:
-  owner: platform-team
+  owner: group:default/platform-team
   type: service
 
   parameters:
@@ -29,16 +46,13 @@ spec:
           title: Add minimal vercel.json
           type: boolean
           default: false
+
     - title: Destination repository
       required:
         - repoOwner
-        - repoName
       properties:
         repoOwner:
-          title: GitHub org or user
-          type: string
-        repoName:
-          title: Repository name
+          title: GitHub org or user for the new repo
           type: string
         defaultBranch:
           title: Default branch
@@ -49,31 +63,33 @@ spec:
           type: string
           enum: [private, public, internal]
           default: private
+
     - title: Catalog
-      required:
-        - owner
-        - system
       properties:
         owner:
           title: Catalog owner
           type: string
-          description: Example group:platform
+          description: Defaults to group:default/platform-team
+          default: group:default/platform-team
         system:
           title: System
           type: string
-          description: Example web
+          description: Optional. Example web
+          default: web
+
     - title: Vercel
       properties:
         vercelProjectName:
           title: Vercel project name
           type: string
-          description: If empty, repoName will be used
+          description: If empty, the derived repo name will be used
         vercelTeamId:
           title: Vercel team ID
           type: string
           description: Optional team scope for the project
 
   steps:
+    # Fetch the source as plain files, no templating
     - id: fetch-source
       name: Fetch source
       action: fetch:template
@@ -82,9 +98,24 @@ spec:
         targetPath: .
         checkout: ${{ parameters.sourceRef }}
         copyWithoutTemplating: true
-        filterPaths:
-          include:
-            - ${{ parameters.sourceSubpath || '.' }}
+        # Uncomment if your Backstage version supports it (>= 1.26)
+        # filterPaths:
+        #   include:
+        #     - ${{ parameters.sourceSubpath || '.' }}
+
+    # Derive repo name from sourceRepoUrl, e.g. https://github.com/org/foo.git -> foo
+    - id: derive-repo-name
+      name: Derive repo name
+      action: roadiehq:utils:execute
+      input:
+        command: bash
+        args:
+          - -lc
+          - |
+            SRC="${{ parameters.sourceRepoUrl }}"
+            NAME="${SRC##*/}"
+            NAME="${NAME%.git}"
+            printf "%s" "$NAME"
 
     - id: maybe-add-vercel-json
       name: Optionally add vercel.json
@@ -110,19 +141,19 @@ spec:
               apiVersion: backstage.io/v1alpha1
               kind: Component
               metadata:
-                name: ${{ parameters.repoName }}
+                name: ${{ steps.derive-repo-name.output.stdout }}
                 description: Service deployed on Vercel
               spec:
                 type: service
                 lifecycle: production
-                owner: ${{ parameters.owner }}
-                system: ${{ parameters.system }}
+                owner: ${{ parameters.owner || 'group:default/platform-team' }}
+                system: ${{ parameters.system || 'web' }}
 
     - id: create-repo
       name: Create GitHub repo
       action: github:repo:create
       input:
-        repoUrl: github.com?owner=${{ parameters.repoOwner }}&repo=${{ parameters.repoName }}
+        repoUrl: github.com?owner=${{ parameters.repoOwner }}&repo=${{ steps.derive-repo-name.output.stdout }}
         description: Scaffolded by Backstage
         defaultBranch: ${{ parameters.defaultBranch }}
         protectDefaultBranch: true
@@ -133,7 +164,8 @@ spec:
       name: Push to GitHub
       action: publish:github
       input:
-        repoUrl: github.com?owner=${{ parameters.repoOwner }}&repo=${{ parameters.repoName }}
+        repoUrl: github.com?owner=${{ parameters.repoOwner }}&repo=${{ steps.derive-repo-name.output.stdout }}
+        commitMessage: "chore(scaffold): import from ${{ parameters.sourceRepoUrl }}"
 
     - id: register
       name: Register in catalog
@@ -150,8 +182,7 @@ spec:
         args:
           - -lc
           - |
-            # Use repoName if no explicit Vercel project name
-            PROJECT_NAME="${{ parameters.vercelProjectName || parameters.repoName }}"
+            PROJECT_NAME="${{ parameters.vercelProjectName || steps.derive-repo-name.output.stdout }}"
             export VERCEL_TOKEN="${{ secrets.VERCEL_TOKEN }}"
 
             TEAM_FLAG=""
@@ -171,4 +202,4 @@ spec:
         entityRef: ${{ steps.register.output.entityRef }}
       - title: Vercel project
         url: >-
-          https://vercel.com/${{ parameters.vercelTeamId && ('teams/' + parameters.vercelTeamId + '/') || '' }}${{ parameters.vercelProjectName || parameters.repoName }}
+          https://vercel.com/${{ parameters.vercelTeamId && ('teams/' + parameters.vercelTeamId + '/') || '' }}${{ parameters.vercelProjectName || steps.derive-repo-name.output.stdout }}
