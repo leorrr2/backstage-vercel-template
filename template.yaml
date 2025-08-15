@@ -38,10 +38,6 @@ spec:
           title: Git ref or branch
           type: string
           description: Optional. Example main or v1.2.3
-        sourceSubpath:
-          title: Subpath
-          type: string
-          description: Optional. Use if the template is in a subfolder
         addVercelJson:
           title: Add minimal vercel.json
           type: boolean
@@ -89,7 +85,7 @@ spec:
           description: Optional team scope for the project
 
   steps:
-    # Fetch the source as plain files, no templating
+    # Fetch files without applying templating. Values is provided as an empty object to satisfy schema.
     - id: fetch-source
       name: Fetch source
       action: fetch:template
@@ -97,14 +93,9 @@ spec:
         url: ${{ parameters.sourceRepoUrl }}
         targetPath: .
         checkout: ${{ parameters.sourceRef }}
-        # Copy everything as-is without applying templating
+        values: {}
         copyWithoutTemplating:
           - '**/*'
-        # Only include the subpath if specified (requires Backstage >= 1.26)
-        filterPaths:
-          include:
-            - ${{ parameters.sourceSubpath || '.' }}
-
 
     # Derive repo name from sourceRepoUrl, e.g. https://github.com/org/foo.git -> foo
     - id: derive-repo-name
