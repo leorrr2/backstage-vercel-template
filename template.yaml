@@ -1,4 +1,4 @@
-# Group + Template combined
+# Group + Template combined, core actions only
 
 apiVersion: backstage.io/v1alpha1
 kind: Group
@@ -21,7 +21,7 @@ metadata:
   name: repo-to-vercel-template
   namespace: default
   title: Any repo to Vercel
-  description: Scaffolds from any Git repo, publishes to GitHub, and deploys to Vercel
+  description: Copies any Git repo, creates a new GitHub repo, and pushes the code
 spec:
   owner: group:default/platform-team
   type: service
@@ -39,17 +39,17 @@ spec:
           title: Git ref or branch
           type: string
           description: Optional. Example main or v1.2.3
-        addVercelJson:
-          title: Add minimal vercel.json
-          type: boolean
-          default: false
 
     - title: Destination repository
       required:
         - repoOwner
+        - repoName
       properties:
         repoOwner:
           title: GitHub org or user for the new repo
+          type: string
+        repoName:
+          title: Repository name
           type: string
         defaultBranch:
           title: Default branch
@@ -61,32 +61,8 @@ spec:
           enum: [private, public, internal]
           default: private
 
-    - title: Catalog
-      properties:
-        owner:
-          title: Catalog owner
-          type: string
-          description: Defaults to group:default/platform-team
-          default: group:default/platform-team
-        system:
-          title: System
-          type: string
-          description: Optional. Example web
-          default: web
-
-    - title: Vercel
-      properties:
-        vercelProjectName:
-          title: Vercel project name
-          type: string
-          description: If empty, the derived repo name will be used
-        vercelTeamId:
-          title: Vercel team ID
-          type: string
-          description: Optional team scope for the project
-
   steps:
-    # Fetch files as-is without templating. Use fetch:plain to avoid copyWithoutTemplating issues.
+    # Copy source as-is without templating
     - id: fetch-source
       name: Fetch source
       action: fetch:plain
@@ -95,103 +71,27 @@ spec:
         targetPath: .
         checkout: ${{ parameters.sourceRef }}
 
-    # Derive repo name from sourceRepoUrl, e.g. https://github.com/org/foo.git -> foo
-    - id: derive-repo-name
-      name: Derive repo name
-      action: roadiehq:utils:execute
-      input:
-        command: bash
-        args:
-          - -lc
-          - |
-            SRC="${{ parameters.sourceRepoUrl }}"
-            NAME="${SRC##*/}"
-            NAME="${NAME%.git}"
-            printf "%s" "$NAME"
-
-    - id: maybe-add-vercel-json
-      name: Optionally add vercel.json
-      action: roadiehq:utils:fs:write
-      if: ${{ parameters.addVercelJson }}
-      input:
-        files:
-          - path: vercel.json
-            contents: |
-              {
-                "framework": "nextjs",
-                "buildCommand": "npm run build || yarn build",
-                "outputDirectory": ".next"
-              }
-
-    - id: add-catalog
-      name: Add catalog-info.yaml
-      action: roadiehq:utils:fs:write
-      input:
-        files:
-          - path: catalog-info.yaml
-            contents: |
-              apiVersion: backstage.io/v1alpha1
-              kind: Component
-              metadata:
-                name: ${{ steps.derive-repo-name.output.stdout }}
-                description: Service deployed on Vercel
-              spec:
-                type: service
-                lifecycle: production
-                owner: ${{ parameters.owner || 'group:default/platform-team' }}
-                system: ${{ parameters.system || 'web' }}
-
+    # Create the destination repo on GitHub
     - id: create-repo
       name: Create GitHub repo
       action: github:repo:create
       input:
-        repoUrl: github.com?owner=${{ parameters.repoOwner }}&repo=${{ steps.derive-repo-name.output.stdout }}
+        repoUrl: github.com?owner=${{ parameters.repoOwner }}&repo=${{ parameters.repoName }}
         description: Scaffolded by Backstage
         defaultBranch: ${{ parameters.defaultBranch }}
         protectDefaultBranch: true
         repoVisibility: ${{ parameters.visibility }}
         allowAutoMerge: true
 
+    # Push the copied code to the new repo
     - id: publish
       name: Push to GitHub
       action: publish:github
       input:
-        repoUrl: github.com?owner=${{ parameters.repoOwner }}&repo=${{ steps.derive-repo-name.output.stdout }}
+        repoUrl: github.com?owner=${{ parameters.repoOwner }}&repo=${{ parameters.repoName }}
         commitMessage: "chore(scaffold): import from ${{ parameters.sourceRepoUrl }}"
-
-    - id: register
-      name: Register in catalog
-      action: catalog:register
-      input:
-        repoContentsUrl: ${{ steps.publish.output.repoContentsUrl }}
-        catalogInfoPath: /catalog-info.yaml
-
-    - id: deploy-vercel
-      name: Deploy to Vercel
-      action: roadiehq:utils:execute
-      input:
-        command: bash
-        args:
-          - -lc
-          - |
-            PROJECT_NAME="${{ parameters.vercelProjectName || steps.derive-repo-name.output.stdout }}"
-            export VERCEL_TOKEN="${{ secrets.VERCEL_TOKEN }}"
-
-            TEAM_FLAG=""
-            if [ -n "${{ parameters.vercelTeamId }}" ]; then
-              TEAM_FLAG="--scope ${{ parameters.vercelTeamId }}"
-            fi
-
-            npm i -g vercel@latest
-            vercel link --project "$PROJECT_NAME" --yes --token "$VERCEL_TOKEN" $TEAM_FLAG || true
-            vercel --prod --confirm --token "$VERCEL_TOKEN" $TEAM_FLAG
 
   output:
     links:
       - title: Source repository
         url: ${{ steps.publish.output.remoteUrl }}
-      - title: Catalog entity
-        entityRef: ${{ steps.register.output.entityRef }}
-      - title: Vercel project
-        url: >-
-          https://vercel.com/${{ parameters.vercelTeamId && ('teams/' + parameters.vercelTeamId + '/') || '' }}${{ parameters.vercelProjectName || steps.derive-repo-name.output.stdout }}
