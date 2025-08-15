@@ -1,4 +1,4 @@
-# Group + Template combined, core actions only
+# Group + Template combined
 
 apiVersion: backstage.io/v1alpha1
 kind: Group
@@ -21,7 +21,7 @@ metadata:
   name: repo-to-vercel-template
   namespace: default
   title: Any repo to Vercel
-  description: Copies any Git repo, creates a new GitHub repo, and pushes the code
+  description: Scaffolds from any Git repo, publishes to GitHub, and deploys to Vercel via GitHub app
 spec:
   owner: group:default/platform-team
   type: service
@@ -39,17 +39,17 @@ spec:
           title: Git ref or branch
           type: string
           description: Optional. Example main or v1.2.3
+        addVercelJson:
+          title: Add minimal vercel.json
+          type: boolean
+          default: false
 
     - title: Destination repository
       required:
         - repoOwner
-        - repoName
       properties:
         repoOwner:
           title: GitHub org or user for the new repo
-          type: string
-        repoName:
-          title: Repository name
           type: string
         defaultBranch:
           title: Default branch
@@ -61,8 +61,19 @@ spec:
           enum: [private, public, internal]
           default: private
 
+    - title: Catalog
+      properties:
+        owner:
+          title: Catalog owner
+          type: string
+          default: group:default/platform-team
+        system:
+          title: System
+          type: string
+          default: web
+
   steps:
-    # Copy source as-is without templating
+    # Copy source repo as-is
     - id: fetch-source
       name: Fetch source
       action: fetch:plain
@@ -71,27 +82,78 @@ spec:
         targetPath: .
         checkout: ${{ parameters.sourceRef }}
 
-    # Create the destination repo on GitHub
+    # Derive repo name from sourceRepoUrl using JSONata
+    - id: derive-repo-name
+      name: Derive repo name
+      action: roadiehq:utils:jsonata
+      input:
+        data:
+          url: ${{ parameters.sourceRepoUrl }}
+        expression: |
+          (
+            $last := $replace($.url, '.*/', '');
+            $name := $replace($last, '\\.git$', '');
+            {"name": $name}
+          )
+
+    - id: maybe-add-vercel-json
+      name: Optionally add vercel.json
+      action: roadiehq:utils:fs:write
+      if: ${{ parameters.addVercelJson }}
+      input:
+        path: vercel.json
+        content: |
+          {
+            "framework": "nextjs",
+            "buildCommand": "npm run build || yarn build",
+            "outputDirectory": ".next"
+          }
+
+    - id: add-catalog
+      name: Add catalog-info.yaml
+      action: roadiehq:utils:fs:write
+      input:
+        path: catalog-info.yaml
+        content: |
+          apiVersion: backstage.io/v1alpha1
+          kind: Component
+          metadata:
+            name: ${{ steps['derive-repo-name'].output.result.name }}
+            description: Service deployed on Vercel
+          spec:
+            type: service
+            lifecycle: production
+            owner: ${{ parameters.owner || 'group:default/platform-team' }}
+            system: ${{ parameters.system || 'web' }}
+
     - id: create-repo
       name: Create GitHub repo
       action: github:repo:create
       input:
-        repoUrl: github.com?owner=${{ parameters.repoOwner }}&repo=${{ parameters.repoName }}
+        repoUrl: github.com?owner=${{ parameters.repoOwner }}&repo=${{ steps['derive-repo-name'].output.result.name }}
         description: Scaffolded by Backstage
         defaultBranch: ${{ parameters.defaultBranch }}
         protectDefaultBranch: true
         repoVisibility: ${{ parameters.visibility }}
         allowAutoMerge: true
 
-    # Push the copied code to the new repo
     - id: publish
       name: Push to GitHub
       action: publish:github
       input:
-        repoUrl: github.com?owner=${{ parameters.repoOwner }}&repo=${{ parameters.repoName }}
+        repoUrl: github.com?owner=${{ parameters.repoOwner }}&repo=${{ steps['derive-repo-name'].output.result.name }}
         commitMessage: "chore(scaffold): import from ${{ parameters.sourceRepoUrl }}"
+
+    - id: register
+      name: Register in catalog
+      action: catalog:register
+      input:
+        repoContentsUrl: ${{ steps.publish.output.repoContentsUrl }}
+        catalogInfoPath: /catalog-info.yaml
 
   output:
     links:
       - title: Source repository
         url: ${{ steps.publish.output.remoteUrl }}
+      - title: Catalog entity
+        entityRef: ${{ steps.register.output.entityRef }}
