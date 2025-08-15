@@ -76,13 +76,12 @@ spec:
   steps:
     - id: fetch-source
       name: Fetch source
-      action: fetch:plain
+      action: fetch:template
       input:
         url: ${{ parameters.sourceRepoUrl }}
         targetPath: .
         checkout: ${{ parameters.sourceRef }}
-        commitMessage: "chore(scaffold): import from ${{ parameters.sourceRepoUrl }}"
-        # If you need a subpath, use filterPaths. Requires Backstage >= 1.26
+        copyWithoutTemplating: true
         filterPaths:
           include:
             - ${{ parameters.sourceSubpath || '.' }}
