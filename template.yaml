@@ -1,4 +1,4 @@
-# platform-team-and-template.yaml
+# Group + Template combined, uses only core actions + http:backstage:request
 
 apiVersion: backstage.io/v1alpha1
 kind: Group
@@ -15,72 +15,54 @@ spec:
 apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
-  name: repo-to-vercel-template
+  name: repo-to-vercel-project
   namespace: default
-  title: Any repo to GitHub
-  description: Copies any Git repo, creates a new GitHub repo, and pushes the code
+  title: Link existing GitHub repo to Vercel
+  description: Creates a Vercel Project from an existing GitHub repository
 spec:
   owner: group:default/platform-team
   type: service
 
   parameters:
-    - title: Source repository
-      required: [sourceRepoUrl]
+    - title: Git and Vercel
+      required:
+        - githubRepo
+        - projectName
       properties:
-        sourceRepoUrl:
-          title: Git URL of source
+        githubRepo:
+          title: GitHub repo (owner/name)
           type: string
-          description: Example https://github.com/org/example-repo.git
-        sourceRef:
-          title: Git ref or branch
+          description: Example vercel/next.js
+        projectName:
+          title: Vercel project name
           type: string
-          description: Optional. Example main or v1.2.3
-    - title: Destination repository
-      required: [repoOwner, repoName]
-      properties:
-        repoOwner:
-          title: GitHub org or user
+          description: Will be the project slug in Vercel
+        vercelTeamId:
+          title: Vercel teamId (optional)
           type: string
-        repoName:
-          title: Repository name
-          type: string
-        defaultBranch:
-          title: Default branch
-          type: string
-          default: main
-        visibility:
-          title: Visibility
-          type: string
-          enum: [private, public, internal]
-          default: private
+          description: Example team_abc123. Leave empty for personal scope
 
   steps:
-    - id: fetch-source
-      name: Fetch source
-      action: fetch:plain
+    - id: create-vercel-project
+      name: Create Vercel Project
+      action: http:backstage:request
       input:
-        url: ${{ parameters.sourceRepoUrl }}
-        targetPath: .
-        checkout: ${{ parameters.sourceRef }}
-
-    - id: create-repo
-      name: Create GitHub repo
-      action: github:repo:create
-      input:
-        repoUrl: github.com?owner=${{ parameters.repoOwner }}&repo=${{ parameters.repoName }}
-        description: Scaffolded by Backstage
-        defaultBranch: ${{ parameters.defaultBranch }}
-        protectDefaultBranch: true
-        repoVisibility: ${{ parameters.visibility }}
-
-    - id: publish
-      name: Push to GitHub
-      action: publish:github
-      input:
-        repoUrl: github.com?owner=${{ parameters.repoOwner }}&repo=${{ parameters.repoName }}
-        commitMessage: "chore(scaffold): import from ${{ parameters.sourceRepoUrl }}"
+        method: POST
+        path: >-
+          proxy/vercel/v11/projects${{ parameters.vercelTeamId && ('?teamId=' + parameters.vercelTeamId) || '' }}
+        headers:
+          Content-Type: application/json
+        body:
+          name: ${{ parameters.projectName }}
+          framework: nextjs
+          gitRepository:
+            type: github
+            repo: ${{ parameters.githubRepo }}
+            sourceless: true
 
   output:
-    links:
-      - title: Source repository
-        url: ${{ steps.publish.output.remoteUrl }}
+    text:
+      - title: Vercel project created
+        content: >-
+          Project "${{ parameters.projectName }}" has been created in Vercel
+          and linked to GitHub repo "${{ parameters.githubRepo }}".
