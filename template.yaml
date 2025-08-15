@@ -97,11 +97,14 @@ spec:
         url: ${{ parameters.sourceRepoUrl }}
         targetPath: .
         checkout: ${{ parameters.sourceRef }}
-        copyWithoutTemplating: true
-        # Uncomment if your Backstage version supports it (>= 1.26)
-        # filterPaths:
-        #   include:
-        #     - ${{ parameters.sourceSubpath || '.' }}
+        # Copy everything as-is without applying templating
+        copyWithoutTemplating:
+          - '**/*'
+        # Only include the subpath if specified (requires Backstage >= 1.26)
+        filterPaths:
+          include:
+            - ${{ parameters.sourceSubpath || '.' }}
+
 
     # Derive repo name from sourceRepoUrl, e.g. https://github.com/org/foo.git -> foo
     - id: derive-repo-name
