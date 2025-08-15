@@ -1,4 +1,4 @@
-# platform-team-and-template.yaml
+# Group + Template combined
 
 apiVersion: backstage.io/v1alpha1
 kind: Group
@@ -19,6 +19,7 @@ apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
 metadata:
   name: repo-to-vercel-template
+  namespace: default
   title: Any repo to Vercel
   description: Scaffolds from any Git repo, publishes to GitHub, and deploys to Vercel
 spec:
@@ -85,17 +86,14 @@ spec:
           description: Optional team scope for the project
 
   steps:
-    # Fetch files without applying templating. Values is provided as an empty object to satisfy schema.
+    # Fetch files as-is without templating. Use fetch:plain to avoid copyWithoutTemplating issues.
     - id: fetch-source
       name: Fetch source
-      action: fetch:template
+      action: fetch:plain
       input:
         url: ${{ parameters.sourceRepoUrl }}
         targetPath: .
         checkout: ${{ parameters.sourceRef }}
-        values: {}
-        copyWithoutTemplating:
-          - '**/*'
 
     # Derive repo name from sourceRepoUrl, e.g. https://github.com/org/foo.git -> foo
     - id: derive-repo-name
